@@ -1,4 +1,5 @@
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 // Run against a published, exact 0.8.0 server package, never the main daemon.
 import { mkdir, mkdtemp, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -21,6 +22,10 @@ assert.equal(
 const { createPaseoDaemon } = await import(
   pathToFileURL(path.join(serverRoot, "dist/server/server/bootstrap.js"))
 );
+const { hashDaemonPassword } = await import(
+  pathToFileURL(path.join(serverRoot, "dist/server/server/auth.js"))
+);
+const password = process.env.PASEO_TEST_AUTH === "1" ? randomUUID() : undefined;
 const { default: pino } = await import(
   pathToFileURL(path.join(installed, "node_modules/pino/pino.js"))
 );
@@ -142,10 +147,15 @@ for (const name of ["createSession", "resumeSession"]) {
   };
 }
 process.env.PATH = `${root}/bin:${process.env.PATH}`;
-process.env.PASEO_GITHUB_CONFIG = path.join(root, "bootstrap.json");
+delete process.env.PASEO_GITHUB_CONFIG;
+process.env.XDG_CONFIG_HOME = path.join(root, "config");
+delete process.env.PASEO_SERVER_ID;
+if (password) process.env.PASEO_PASSWORD = password;
+else delete process.env.PASEO_PASSWORD;
 process.env.PASEO_HOME = path.join(root, "home");
 const config = {
   listen: "127.0.0.1:0",
+  auth: password ? { password: hashDaemonPassword(password) } : undefined,
   daemonVersion: "0.8.0",
   paseoHome: path.join(root, "home"),
   corsAllowedOrigins: [],
@@ -174,10 +184,15 @@ try {
   assert.equal(target?.type, "tcp");
   const url = `ws://127.0.0.1:${target.port}/ws`;
   await writeFile(
-    process.env.PASEO_GITHUB_CONFIG,
-    JSON.stringify({ daemonUrl: url, dataDir: path.join(root, "plugin-state") }),
+    path.join(config.paseoHome, "paseo.pid"),
+    JSON.stringify({ pid: process.pid, listen: `127.0.0.1:${target.port}` }),
   );
-  client = new DaemonClient({ url, appVersion: "0.8.0", clientId: "github-pr-verification" });
+  client = new DaemonClient({
+    url,
+    password,
+    appVersion: "0.8.0",
+    clientId: "github-pr-verification",
+  });
   await client.connect();
   await client.patchDaemonConfig({ pluginsEnabled: true });
   await client.installDirectoryPlugin(process.cwd());
@@ -192,12 +207,23 @@ try {
     }
     throw new Error(`Timed out: ${description}`);
   };
+  await wait(async () => {
+    try {
+      const state = JSON.parse(
+        await readFile(path.join(config.paseoHome, "plugin-data/github-pr/state.json"), "utf8"),
+      );
+      return state.account === "integration-fixture";
+    } catch (error) {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }
+  }, "background discovery ran before the first plugin RPC");
   const get = () => client.invokePluginRpc("github-pr", "github.snapshot", {});
   await wait(async () => {
     const s = await get();
     return s.connected && s.state.account === "integration-fixture";
-  }, "plugin compiled, loaded, and background SDK connected");
-  sdk = createPaseoClient({ url, appVersion: "0.8.0" });
+  }, "plugin compiled, loaded, and background SDK connected without bootstrap");
+  sdk = createPaseoClient({ url, password, appVersion: "0.8.0" });
   await sdk.connect();
   const workspace = await sdk.workspaces.create({
     source: { kind: "directory", path: repo },
@@ -358,11 +384,11 @@ try {
   client = undefined;
   await daemon.stop();
   daemon = undefined;
-  // Restart the same isolated daemon on the same port and with the configured plugin.
+  // Restart on a different port; storage belongs to the daemon identity, not its port.
   daemon = await createPaseoDaemon(
     {
       ...config,
-      listen: `127.0.0.1:${target.port}`,
+      listen: "127.0.0.1:0",
       pluginsEnabled: true,
       plugins: {
         "github-pr": { source: "directory", path: process.cwd(), enabled: true },
@@ -371,7 +397,18 @@ try {
     pino({ level: "warn" }),
   );
   await daemon.start();
-  client = new DaemonClient({ url, appVersion: "0.8.0", clientId: "github-pr-verification" });
+  const restartedTarget = daemon.getListenTarget();
+  await writeFile(
+    path.join(config.paseoHome, "paseo.pid"),
+    JSON.stringify({ pid: process.pid, listen: `127.0.0.1:${restartedTarget.port}` }),
+  );
+  const restartedUrl = `ws://127.0.0.1:${restartedTarget.port}/ws`;
+  client = new DaemonClient({
+    url: restartedUrl,
+    password,
+    appVersion: "0.8.0",
+    clientId: "github-pr-verification",
+  });
   await client.connect();
   await wait(async () => {
     const s = await get();

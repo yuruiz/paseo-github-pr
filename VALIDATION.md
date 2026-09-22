@@ -20,9 +20,10 @@ Set `PASEO_TEST_CLI_ROOT` to an installed `@getpaseo/cli` 0.8.0 package director
 
 ```sh
 node scripts/verify-daemon.mjs
+PASEO_TEST_AUTH=1 node scripts/verify-daemon.mjs
 ```
 
-The script starts its own loopback daemon on an ephemeral port, with temporary state, Git repositories, a fake agent provider, and synthetic GitHub responses. It checks plugin compilation, RPCs, SDK operations, event dispatch, review workspaces, approval invalidation, and recovery across plugin reload and isolated daemon restart. It does not connect to the user's main daemon or contact GitHub.
+The script starts its own loopback daemon on an ephemeral port, with temporary state, Git repositories, a fake agent provider, and synthetic GitHub responses. It installs without a bootstrap file and checks automatic address discovery, daemon identity, plugin compilation, RPCs, SDK operations, event dispatch, review workspaces, approval invalidation, and recovery across plugin reload and isolated daemon restart on a different port. It verifies discovery before the first plugin RPC. `PASEO_TEST_AUTH=1` also checks a password-protected daemon using a generated temporary password. The fixture writes the PID descriptor that the normal Paseo supervisor owns. It does not connect to the user's main daemon or contact GitHub.
 
 The fake provider source comes from the explicitly supplied Paseo checkout. Keep that checkout at the matching release; the fixture is not a public SDK contract.
 

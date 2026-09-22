@@ -11,41 +11,21 @@ A Paseo plugin for monitoring GitHub pull requests, binding them to workspaces, 
 
 ## Install
 
-Create a private bootstrap file on the daemon machine. The default location is `$XDG_CONFIG_HOME/paseo-github-pr/bootstrap.json`, or `~/.config/paseo-github-pr/bootstrap.json` when `XDG_CONFIG_HOME` is unset. To use another location, set `PASEO_GITHUB_CONFIG` in the daemon environment to its absolute filename.
-
-This example uses the default location and a separate runtime data directory:
-
-```sh
-node --input-type=module <<'JS'
-import { mkdir, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import path from 'node:path';
-const directory = path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config'), 'paseo-github-pr');
-await mkdir(directory, { recursive: true, mode: 0o700 });
-await writeFile(path.join(directory, 'bootstrap.json'), JSON.stringify({
-  daemonUrl: 'ws://127.0.0.1:6767/ws',
-  dataDir: path.join(homedir(), '.local', 'share', 'paseo-github-pr')
-}, null, 2), { mode: 0o600, flag: 'wx' });
-JS
-```
-
-Set `daemonUrl` to the installing daemon's loopback WebSocket endpoint. Use a dedicated absolute `dataDir` for each daemon and GitHub account; it stores PR data, workspace paths, and approval state. Keep it outside the plugin source directory. Existing bootstrap files are not overwritten by the example.
-
-For password-protected daemons, add `passwordEnv` with the name of an environment variable available to the daemon. Never put a password in `daemonUrl`, the repository, or the bootstrap JSON itself. A missing bootstrap file stops background work and shows a configuration error.
-
 Clone and install from the daemon machine:
 
 ```sh
 git clone https://github.com/yuruiz/paseo-github-pr.git
 cd paseo-github-pr
-npm ci --ignore-scripts
-npm run typecheck
 paseo plugin install "$PWD"
 ```
 
 After installation, open **GitHub PRs** in the sidebar or **Open GitHub PRs** in the Command Center. The plugin also contributes a workspace panel. Source updates require `paseo plugin reload github-pr`; a daemon restart is not required. Configure Git HTTPS authentication, for example with `gh auth setup-git`, before confirming pushes.
 
-The plugin keeps a separate public SDK connection because Paseo 0.8.0 does not provide one to the server entry at startup. It only accepts loopback endpoints and pins each data directory to its configured endpoint.
+No bootstrap file is required. The plugin discovers the installing daemon's address and creates private runtime storage under `$PASEO_HOME/plugin-data/github-pr` (`~/.paseo/plugin-data/github-pr` by default). Installation runs the dependency build declared in the plugin manifest. Monitoring starts in the background without opening the panel and resumes after reload or daemon restart.
+
+For password-protected daemons, the plugin uses the daemon's existing `PASEO_PASSWORD` environment variable. A password stored only as a hash in Paseo settings cannot be recovered; that deployment must provide `PASEO_PASSWORD` to the daemon for unattended connections. Automatic discovery currently supports TCP listeners, including wildcard bind addresses, and verifies the daemon identity before using the SDK.
+
+Existing `PASEO_GITHUB_CONFIG` and default-location bootstrap files remain supported, including their data directory and password environment settings. Leave them in place when upgrading to retain tracked PRs, approvals, and preferences.
 
 ## Using the inbox
 

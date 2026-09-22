@@ -1,8 +1,6 @@
-import { homedir } from "node:os";
 import { readFile, mkdir, access } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { z } from "zod";
 import { createPaseoClient, type PaseoApi, type PaseoClient } from "@getpaseo/client";
 import { type RpcInput } from "@getpaseo/plugin";
 import { command } from "../shared/rpc";
@@ -11,6 +9,7 @@ import { configureProcesses } from "./process";
 import { Store, dataPath } from "./store";
 import { Git, candidates } from "./git";
 import { GitHub, parseUrl } from "./github";
+import { resolveSetup, resolveConnection, verifyHost, type Setup } from "./setup";
 
 export type Command = RpcInput<typeof command>;
 export type Extension = {
@@ -18,11 +17,6 @@ export type Extension = {
   command(input: Command): Promise<string | undefined>;
   observed?(state: PluginState, pr: PR, fresh: PR["signals"]): void;
 };
-const Bootstrap = z.object({
-  daemonUrl: z.string().url(),
-  dataDir: z.string(),
-  passwordEnv: z.string().optional(),
-});
 export class Runtime {
   store?: Store;
   api?: PaseoApi;
@@ -36,6 +30,7 @@ export class Runtime {
   private timer?: ReturnType<typeof setTimeout>;
   private tail: Promise<unknown> = Promise.resolve();
   private backoff = 0;
+  private setup?: Setup;
   constructor(
     readonly github = new GitHub(),
     readonly git = new Git(),
@@ -50,26 +45,9 @@ export class Runtime {
   }
   async start() {
     try {
-      const file =
-        process.env.PASEO_GITHUB_CONFIG ??
-        path.join(
-          process.env.XDG_CONFIG_HOME ?? path.join(homedir(), ".config"),
-          "paseo-github-pr",
-          "bootstrap.json",
-        );
-      await dataPath(file);
-      const config = Bootstrap.parse(JSON.parse(await readFile(file, "utf8")));
-      const url = new URL(config.daemonUrl);
-      if (url.username || url.password || url.search || url.hash)
-        throw new Error(
-          "daemonUrl must not contain credentials or query parameters; use passwordEnv",
-        );
-      if (
-        !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
-        !["ws:", "wss:"].includes(url.protocol)
-      )
-        throw new Error("daemonUrl must address this daemon on loopback");
+      const config = await resolveSetup();
       this.store = new Store(await dataPath(config.dataDir));
+      await mkdir(config.dataDir, { recursive: true, mode: 0o700 });
       await this.store.open();
       const temporary = path.join(config.dataDir, "tmp");
       const cache = path.join(config.dataDir, "cache");
@@ -78,27 +56,22 @@ export class Runtime {
       configureProcesses(this.controller.signal, temporary, cache);
       const endpointFile = path.join(config.dataDir, "endpoint.json");
       try {
-        if (JSON.parse(await readFile(endpointFile, "utf8")).url !== config.daemonUrl)
+        if (JSON.parse(await readFile(endpointFile, "utf8")).url !== config.identity)
           throw new Error("Data directory belongs to a different daemon endpoint");
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
         const { writeFile } = await import("node:fs/promises");
-        await writeFile(endpointFile, JSON.stringify({ url: config.daemonUrl }), {
+        await writeFile(endpointFile, JSON.stringify({ url: config.identity }), {
           flag: "wx",
           mode: 0o600,
         });
       }
-      this.client = createPaseoClient({
-        url: config.daemonUrl,
-        appVersion: "0.8.0",
-        password: config.passwordEnv ? process.env[config.passwordEnv] : undefined,
-        reconnect: { enabled: true },
-        connectTimeoutMs: 5000,
-      });
-      this.api = this.client;
+      this.setup = config;
       this.schedule(0);
     } catch (error) {
       this.error = String(error);
+      await this.store?.close();
+      this.store = undefined;
     }
   }
   private schedule(delay: number) {
@@ -110,9 +83,25 @@ export class Runtime {
       }, delay);
   }
   async tick(force = false) {
-    if (this.stopped || !this.api || !this.store) return;
+    if (this.stopped || !this.store) return;
     try {
-      if (!this.connected && this.client) await this.client.connect();
+      if (!this.connected && this.setup) {
+        await this.client?.close();
+        this.client = undefined;
+        this.api = undefined;
+        const connection = await resolveConnection(this.setup);
+        await verifyHost(this.setup, connection, this.controller.signal);
+        if (this.stopped) return;
+        this.client = createPaseoClient({
+          ...connection,
+          appVersion: "0.8.0",
+          reconnect: { enabled: false },
+          connectTimeoutMs: 5000,
+        });
+        this.api = this.client;
+        await this.client.connect();
+      }
+      if (!this.api) return;
       this.connected = false;
       await this.refreshWorkspaces();
       this.connected = true;

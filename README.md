@@ -5,7 +5,7 @@ A Paseo plugin for monitoring GitHub pull requests, binding them to workspaces, 
 ## Requirements
 
 - Linux, Node.js 22, Git, and `flock` (util-linux).
-- Paseo daemon **0.8.0**, with app **0.8.x, 0.9.0-beta.1, or 0.9.0-beta.2**. Other versions have not been validated.
+- Paseo daemon and app **0.8.0 or later**. The manifest declares the minimum API version without a release whitelist, so upgrades do not need a manifest edit. Future breaking API changes may still require a plugin update; accepting a version does not mean that release has been tested.
 - GitHub CLI (`gh`) authenticated to GitHub.com on the daemon machine. Repository access follows that account's permissions.
 - Enable plugins in Paseo Settings. Plugins run trusted code with your local user's access.
 

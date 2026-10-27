@@ -1,3 +1,6 @@
+> This plugin is now maintained in [paseo-plugins/github-pr](https://github.com/yuruiz/paseo-plugins/tree/main/github-pr).
+> Install with `paseo plugin add git:yuruiz/paseo-plugins:github-pr`. Existing tags remain available for compatibility.
+
 # GitHub PR for Paseo
 
 A Paseo plugin for monitoring GitHub pull requests, binding them to workspaces, running local repairs, and preparing reviews. The inbox groups PRs by repository and shows checks, comments, tasks, and approval previews.
